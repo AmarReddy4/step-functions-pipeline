@@ -1,0 +1,120 @@
+{
+  "Comment": "Data processing pipeline: validate, process, store, and notify",
+  "StartAt": "ValidateInput",
+  "States": {
+    "ValidateInput": {
+      "Type": "Task",
+      "Resource": "${ValidateFunctionArn}",
+      "ResultPath": "$.validation",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["ValidationError"],
+          "ResultPath": "$.error",
+          "Next": "HandleValidationError"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "HandleUnexpectedError"
+        }
+      ],
+      "Next": "ProcessData"
+    },
+    "ProcessData": {
+      "Type": "Task",
+      "Resource": "${ProcessFunctionArn}",
+      "ResultPath": "$.processing",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        },
+        {
+          "ErrorEquals": ["ProcessingError"],
+          "IntervalSeconds": 10,
+          "MaxAttempts": 2,
+          "BackoffRate": 1.5
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "HandleUnexpectedError"
+        }
+      ],
+      "Next": "StoreResults"
+    },
+    "StoreResults": {
+      "Type": "Task",
+      "Resource": "${StoreFunctionArn}",
+      "ResultPath": "$.storage",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 3,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "HandleUnexpectedError"
+        }
+      ],
+      "Next": "NotifyComplete"
+    },
+    "NotifyComplete": {
+      "Type": "Task",
+      "Resource": "${NotifyFunctionArn}",
+      "ResultPath": "$.notification",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "End": true
+    },
+    "HandleValidationError": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "FAILED",
+        "stage": "validation",
+        "error.$": "$.error"
+      },
+      "ResultPath": "$.failureInfo",
+      "Next": "NotifyFailure"
+    },
+    "HandleUnexpectedError": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "FAILED",
+        "stage": "unknown",
+        "error.$": "$.error"
+      },
+      "ResultPath": "$.failureInfo",
+      "Next": "NotifyFailure"
+    },
+    "NotifyFailure": {
+      "Type": "Task",
+      "Resource": "${NotifyFunctionArn}",
+      "ResultPath": "$.notification",
+      "End": true
+    }
+  }
+}

@@ -1,0 +1,108 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Step Functions data processing pipeline with validation, processing, storage, and notifications
+
+Globals:
+  Function:
+    Timeout: 60
+    Runtime: python3.12
+    MemorySize: 256
+
+Parameters:
+  NotificationEmail:
+    Type: String
+    Description: Email address for pipeline completion notifications
+
+Resources:
+  ValidateFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: validate.handler
+      Description: Validates input data format and schema
+
+  ProcessFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: process.handler
+      Description: Transforms and aggregates input data
+      Timeout: 300
+      MemorySize: 512
+
+  StoreFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: store.handler
+      Description: Stores processed results in S3
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref ResultsBucket
+
+  NotifyFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: notify.handler
+      Description: Publishes completion notification to SNS
+      Environment:
+        Variables:
+          SNS_TOPIC_ARN: !Ref NotificationTopic
+      Policies:
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt NotificationTopic.TopicName
+
+  DataPipeline:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      DefinitionUri: statemachine/definition.asl.json
+      DefinitionSubstitutions:
+        ValidateFunctionArn: !GetAtt ValidateFunction.Arn
+        ProcessFunctionArn: !GetAtt ProcessFunction.Arn
+        StoreFunctionArn: !GetAtt StoreFunction.Arn
+        NotifyFunctionArn: !GetAtt NotifyFunction.Arn
+        ResultsBucket: !Ref ResultsBucket
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ValidateFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ProcessFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref StoreFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref NotifyFunction
+
+  ResultsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireOldResults
+            Status: Enabled
+            ExpirationInDays: 90
+
+  NotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: Pipeline Notifications
+      Subscription:
+        - Endpoint: !Ref NotificationEmail
+          Protocol: email
+
+Outputs:
+  StateMachineArn:
+    Description: Data pipeline state machine ARN
+    Value: !Ref DataPipeline
+
+  ResultsBucketName:
+    Description: S3 bucket for pipeline results
+    Value: !Ref ResultsBucket
+
+  NotificationTopicArn:
+    Description: SNS topic for pipeline notifications
+    Value: !Ref NotificationTopic
