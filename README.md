@@ -90,7 +90,3 @@ aws stepfunctions start-execution \
 ```
 
 All records must include an `id` field. Additional fields depend on the data type.
-
-## License
-
-MIT
